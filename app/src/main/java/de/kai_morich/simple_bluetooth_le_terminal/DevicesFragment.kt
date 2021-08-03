@@ -1,206 +1,164 @@
-package de.kai_morich.simple_bluetooth_le_terminal;
+package de.kai_morich.simple_bluetooth_le_terminal
 
-import android.Manifest;
-import android.annotation.SuppressLint;
-import android.app.AlertDialog;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.content.pm.PackageManager;
-import android.location.LocationManager;
-import android.os.AsyncTask;
-import android.os.Build;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import androidx.annotation.NonNull;
-import androidx.fragment.app.Fragment;
-import androidx.fragment.app.ListFragment;
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
-import android.view.View;
-import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
-import android.widget.ListView;
-import android.widget.TextView;
-
-import java.util.ArrayList;
-import java.util.Collections;
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothAdapter.LeScanCallback
+import android.bluetooth.BluetoothDevice
+import android.content.*
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.*
+import android.provider.Settings
+import android.view.*
+import android.widget.ArrayAdapter
+import android.widget.ListView
+import android.widget.TextView
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.ListFragment
+import java.util.*
 
 /**
  * show list of BLE devices
  */
-public class DevicesFragment extends ListFragment {
-
-    private enum ScanState { NONE, LE_SCAN, DISCOVERY, DISCOVERY_FINISHED }
-    private ScanState scanState = ScanState.NONE;
-    private static final long LE_SCAN_PERIOD = 10000; // similar to bluetoothAdapter.startDiscovery
-    private final Handler leScanStopHandler = new Handler();
-    private final BluetoothAdapter.LeScanCallback leScanCallback;
-    private final BroadcastReceiver discoveryBroadcastReceiver;
-    private final IntentFilter discoveryIntentFilter;
-
-    private Menu menu;
-    private BluetoothAdapter bluetoothAdapter;
-    private final ArrayList<BluetoothDevice> listItems = new ArrayList<>();
-    private ArrayAdapter<BluetoothDevice> listAdapter;
-
-    public DevicesFragment() {
-        leScanCallback = (device, rssi, scanRecord) -> {
-            if(device != null && getActivity() != null) {
-                getActivity().runOnUiThread(() -> { updateScan(device); });
-            }
-        };
-        discoveryBroadcastReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if(BluetoothDevice.ACTION_FOUND.equals(intent.getAction())) {
-                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                    if(device.getType() != BluetoothDevice.DEVICE_TYPE_CLASSIC && getActivity() != null) {
-                        getActivity().runOnUiThread(() -> updateScan(device));
-                    }
-                }
-                if(BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(intent.getAction())) {
-                    scanState = ScanState.DISCOVERY_FINISHED; // don't cancel again
-                    stopScan();
-                }
-            }
-        };
-        discoveryIntentFilter = new IntentFilter();
-        discoveryIntentFilter.addAction(BluetoothDevice.ACTION_FOUND);
-        discoveryIntentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+class DevicesFragment : ListFragment() {
+    private enum class ScanState {
+        NONE, LE_SCAN, DISCOVERY, DISCOVERY_FINISHED
     }
 
-    @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setHasOptionsMenu(true);
-        if(getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH))
-            bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-        listAdapter = new ArrayAdapter<BluetoothDevice>(getActivity(), 0, listItems) {
-            @NonNull
-            @Override
-            public View getView(int position, View view, @NonNull ViewGroup parent) {
-                BluetoothDevice device = listItems.get(position);
-                if (view == null)
-                    view = getActivity().getLayoutInflater().inflate(R.layout.device_list_item, parent, false);
-                TextView text1 = view.findViewById(R.id.text1);
-                TextView text2 = view.findViewById(R.id.text2);
-                if(device.getName() == null || device.getName().isEmpty())
-                    text1.setText("<unnamed>");
-                else
-                    text1.setText(device.getName());
-                text2.setText(device.getAddress());
-                return view;
+    private var scanState = ScanState.NONE
+    private val leScanStopHandler = Handler()
+    private val leScanCallback: LeScanCallback
+    private val discoveryBroadcastReceiver: BroadcastReceiver
+    private val discoveryIntentFilter: IntentFilter
+    private var menu: Menu? = null
+    private var bluetoothAdapter: BluetoothAdapter? = null
+    private val listItems = ArrayList<BluetoothDevice?>()
+    private var listAdapter: ArrayAdapter<BluetoothDevice>? = null
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setHasOptionsMenu(true)
+        if (activity!!.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH)) bluetoothAdapter =
+            BluetoothAdapter.getDefaultAdapter()
+        listAdapter = object : ArrayAdapter<BluetoothDevice>(activity!!, 0, listItems) {
+            override fun getView(position: Int, view: View?, parent: ViewGroup): View {
+                var view = view
+                val device = listItems[position]
+                if (view == null) view =
+                    activity!!.layoutInflater.inflate(R.layout.device_list_item, parent, false)
+                val text1 = view!!.findViewById<TextView>(R.id.text1)
+                val text2 = view.findViewById<TextView>(R.id.text2)
+                if (device!!.name == null || device.name.isEmpty()) text1.text =
+                    "<unnamed>" else text1.text = device.name
+                text2.text = device.address
+                return view
             }
-        };
+        }
     }
 
-    @Override
-    public void onActivityCreated(Bundle savedInstanceState) {
-        super.onActivityCreated(savedInstanceState);
-        setListAdapter(null);
-        View header = getActivity().getLayoutInflater().inflate(R.layout.device_list_header, null, false);
-        getListView().addHeaderView(header, null, false);
-        setEmptyText("initializing...");
-        ((TextView) getListView().getEmptyView()).setTextSize(18);
-        setListAdapter(listAdapter);
+    override fun onActivityCreated(savedInstanceState: Bundle?) {
+        super.onActivityCreated(savedInstanceState)
+        setListAdapter(null)
+        val header = activity!!.layoutInflater.inflate(R.layout.device_list_header, null, false)
+        listView.addHeaderView(header, null, false)
+        setEmptyText("initializing...")
+        (listView.emptyView as TextView).textSize = 18f
+        setListAdapter(listAdapter)
     }
 
-    @Override
-    public void onCreateOptionsMenu(@NonNull Menu menu, MenuInflater inflater) {
-        inflater.inflate(R.menu.menu_devices, menu);
-        this.menu = menu;
+    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
+        inflater.inflate(R.menu.menu_devices, menu)
+        this.menu = menu
         if (bluetoothAdapter == null) {
-            menu.findItem(R.id.bt_settings).setEnabled(false);
-            menu.findItem(R.id.ble_scan).setEnabled(false);
-        } else if(!bluetoothAdapter.isEnabled()) {
-            menu.findItem(R.id.ble_scan).setEnabled(false);
+            menu.findItem(R.id.bt_settings).isEnabled = false
+            menu.findItem(R.id.ble_scan).isEnabled = false
+        } else if (!bluetoothAdapter!!.isEnabled) {
+            menu.findItem(R.id.ble_scan).isEnabled = false
         }
     }
 
-    @Override
-    public void onResume() {
-        super.onResume();
-        getActivity().registerReceiver(discoveryBroadcastReceiver, discoveryIntentFilter);
-        if(bluetoothAdapter == null) {
-            setEmptyText("<bluetooth LE not supported>");
-        } else if(!bluetoothAdapter.isEnabled()) {
-            setEmptyText("<bluetooth is disabled>");
+    override fun onResume() {
+        super.onResume()
+        activity!!.registerReceiver(discoveryBroadcastReceiver, discoveryIntentFilter)
+        if (bluetoothAdapter == null) {
+            setEmptyText("<bluetooth LE not supported>")
+        } else if (!bluetoothAdapter!!.isEnabled) {
+            setEmptyText("<bluetooth is disabled>")
             if (menu != null) {
-                listItems.clear();
-                listAdapter.notifyDataSetChanged();
-                menu.findItem(R.id.ble_scan).setEnabled(false);
+                listItems.clear()
+                listAdapter!!.notifyDataSetChanged()
+                menu!!.findItem(R.id.ble_scan).isEnabled = false
             }
         } else {
-            setEmptyText("<use SCAN to refresh devices>");
-            if (menu != null)
-                menu.findItem(R.id.ble_scan).setEnabled(true);
+            setEmptyText("<use SCAN to refresh devices>")
+            if (menu != null) menu!!.findItem(R.id.ble_scan).isEnabled = true
         }
     }
 
-    @Override
-    public void onPause() {
-        super.onPause();
-        stopScan();
-        getActivity().unregisterReceiver(discoveryBroadcastReceiver);
+    override fun onPause() {
+        super.onPause()
+        stopScan()
+        activity!!.unregisterReceiver(discoveryBroadcastReceiver)
     }
 
-    @Override
-    public void onDestroyView() {
-        super.onDestroyView();
-        menu = null;
+    override fun onDestroyView() {
+        super.onDestroyView()
+        menu = null
     }
 
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        int id = item.getItemId();
-        if (id == R.id.ble_scan) {
-            startScan();
-            return true;
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        val id = item.itemId
+        return if (id == R.id.ble_scan) {
+            startScan()
+            true
         } else if (id == R.id.ble_scan_stop) {
-            stopScan();
-            return true;
+            stopScan()
+            true
         } else if (id == R.id.bt_settings) {
-            Intent intent = new Intent();
-            intent.setAction(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS);
-            startActivity(intent);
-            return true;
+            val intent = Intent()
+            intent.action = Settings.ACTION_BLUETOOTH_SETTINGS
+            startActivity(intent)
+            true
         } else {
-            return super.onOptionsItemSelected(item);
+            super.onOptionsItemSelected(item)
         }
     }
 
     @SuppressLint("StaticFieldLeak") // AsyncTask needs reference to this fragment
-    private void startScan() {
-        if(scanState != ScanState.NONE)
-            return;
-        scanState = ScanState.LE_SCAN;
+    private fun startScan() {
+        if (scanState != ScanState.NONE) return
+        scanState = ScanState.LE_SCAN
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (getActivity().checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                scanState = ScanState.NONE;
-                AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
-                builder.setTitle(R.string.location_permission_title);
-                builder.setMessage(R.string.location_permission_message);
-                builder.setPositiveButton(android.R.string.ok,
-                        (dialog, which) -> requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 0));
-                builder.show();
-                return;
+            if (activity!!.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                scanState = ScanState.NONE
+                val builder = AlertDialog.Builder(activity)
+                builder.setTitle(R.string.location_permission_title)
+                builder.setMessage(R.string.location_permission_message)
+                builder.setPositiveButton(
+                    android.R.string.ok
+                ) { dialog: DialogInterface?, which: Int ->
+                    requestPermissions(
+                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                        0
+                    )
+                }
+                builder.show()
+                return
             }
-            LocationManager locationManager = (LocationManager) getActivity().getSystemService(Context.LOCATION_SERVICE);
-            boolean         locationEnabled = false;
+            val locationManager =
+                activity!!.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            var locationEnabled = false
             try {
-                locationEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
-            } catch(Exception ignored) {}
+                locationEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+            } catch (ignored: Exception) {
+            }
             try {
-                locationEnabled |= locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
-            } catch(Exception ignored) {}
-            if(!locationEnabled)
-                scanState = ScanState.DISCOVERY;
+                locationEnabled =
+                    locationEnabled or locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            } catch (ignored: Exception) {
+            }
+            if (!locationEnabled) scanState = ScanState.DISCOVERY
             // Starting with Android 6.0 a bluetooth scan requires ACCESS_COARSE_LOCATION permission, but that's not all!
             // LESCAN also needs enabled 'location services', whereas DISCOVERY works without.
             // Most users think of GPS as 'location service', but it includes more, as we see here.
@@ -208,96 +166,130 @@ public class DevicesFragment extends ListFragment {
             // we fall back to the older API that scans for bluetooth classic _and_ LE
             // sometimes the older API returns less results or slower
         }
-        listItems.clear();
-        listAdapter.notifyDataSetChanged();
-        setEmptyText("<scanning...>");
-        menu.findItem(R.id.ble_scan).setVisible(false);
-        menu.findItem(R.id.ble_scan_stop).setVisible(true);
-        if(scanState == ScanState.LE_SCAN) {
-            leScanStopHandler.postDelayed(this::stopScan, LE_SCAN_PERIOD);
-            new AsyncTask<Void, Void, Void>() {
-                @Override
-                protected Void doInBackground(Void[] params) {
-                    bluetoothAdapter.startLeScan(null, leScanCallback);
-                    return null;
+        listItems.clear()
+        listAdapter!!.notifyDataSetChanged()
+        setEmptyText("<scanning...>")
+        menu!!.findItem(R.id.ble_scan).isVisible = false
+        menu!!.findItem(R.id.ble_scan_stop).isVisible = true
+        if (scanState == ScanState.LE_SCAN) {
+            leScanStopHandler.postDelayed({ stopScan() }, LE_SCAN_PERIOD)
+            object : AsyncTask<Void?, Void?, Void?>() {
+                override fun doInBackground(params: Array<Void?>): Void? {
+                    bluetoothAdapter!!.startLeScan(null, leScanCallback)
+                    return null
                 }
-            }.execute(); // start async to prevent blocking UI, because startLeScan sometimes take some seconds
+            }.execute() // start async to prevent blocking UI, because startLeScan sometimes take some seconds
         } else {
-            bluetoothAdapter.startDiscovery();
+            bluetoothAdapter!!.startDiscovery()
         }
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
         // ignore requestCode as there is only one in this fragment
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            new Handler(Looper.getMainLooper()).postDelayed(this::startScan,1); // run after onResume to avoid wrong empty-text
+        if (grantResults.size > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            Handler(Looper.getMainLooper()).postDelayed(
+                { startScan() },
+                1
+            ) // run after onResume to avoid wrong empty-text
         } else {
-            AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
-            builder.setTitle(getText(R.string.location_denied_title));
-            builder.setMessage(getText(R.string.location_denied_message));
-            builder.setPositiveButton(android.R.string.ok, null);
-            builder.show();
+            val builder = AlertDialog.Builder(activity)
+            builder.setTitle(getText(R.string.location_denied_title))
+            builder.setMessage(getText(R.string.location_denied_message))
+            builder.setPositiveButton(android.R.string.ok, null)
+            builder.show()
         }
     }
 
-    private void updateScan(BluetoothDevice device) {
-        if(scanState == ScanState.NONE)
-            return;
-        if(!listItems.contains(device)) {
-            listItems.add(device);
-            Collections.sort(listItems, DevicesFragment::compareTo);
-            listAdapter.notifyDataSetChanged();
+    private fun updateScan(device: BluetoothDevice?) {
+        if (scanState == ScanState.NONE) return
+        if (!listItems.contains(device)) {
+            listItems.add(device)
+            Collections.sort(listItems) { a: BluetoothDevice?, b: BluetoothDevice? ->
+                compareTo(
+                    a,
+                    b
+                )
+            }
+            listAdapter!!.notifyDataSetChanged()
         }
     }
 
-    private void stopScan() {
-        if(scanState == ScanState.NONE)
-            return;
-        setEmptyText("<no bluetooth devices found>");
-        if(menu != null) {
-            menu.findItem(R.id.ble_scan).setVisible(true);
-            menu.findItem(R.id.ble_scan_stop).setVisible(false);
+    private fun stopScan() {
+        if (scanState == ScanState.NONE) return
+        setEmptyText("<no bluetooth devices found>")
+        if (menu != null) {
+            menu!!.findItem(R.id.ble_scan).isVisible = true
+            menu!!.findItem(R.id.ble_scan_stop).isVisible = false
         }
-        switch(scanState) {
-            case LE_SCAN:
-                leScanStopHandler.removeCallbacks(this::stopScan);
-                bluetoothAdapter.stopLeScan(leScanCallback);
-                break;
-            case DISCOVERY:
-                bluetoothAdapter.cancelDiscovery();
-                break;
-            default:
-                // already canceled
+        when (scanState) {
+            ScanState.LE_SCAN -> {
+                leScanStopHandler.removeCallbacks { stopScan() }
+                bluetoothAdapter!!.stopLeScan(leScanCallback)
+            }
+            ScanState.DISCOVERY -> bluetoothAdapter!!.cancelDiscovery()
+            else -> {
+            }
         }
-        scanState = ScanState.NONE;
-
+        scanState = ScanState.NONE
     }
 
-    @Override
-    public void onListItemClick(@NonNull ListView l, @NonNull View v, int position, long id) {
-        stopScan();
-        BluetoothDevice device = listItems.get(position-1);
-        Bundle args = new Bundle();
-        args.putString("device", device.getAddress());
-        Fragment fragment = new TerminalFragment();
-        fragment.setArguments(args);
-        getFragmentManager().beginTransaction().replace(R.id.fragment, fragment, "terminal").addToBackStack(null).commit();
+    override fun onListItemClick(l: ListView, v: View, position: Int, id: Long) {
+        stopScan()
+        val device = listItems[position - 1]
+        val args = Bundle()
+        args.putString("device", device!!.address)
+        val fragment: Fragment = TerminalFragment()
+        fragment.arguments = args
+        fragmentManager!!.beginTransaction().replace(R.id.fragment, fragment, "terminal")
+            .addToBackStack(null).commit()
     }
 
-    /**
-     * sort by name, then address. sort named devices first
-     */
-    static int compareTo(BluetoothDevice a, BluetoothDevice b) {
-        boolean aValid = a.getName()!=null && !a.getName().isEmpty();
-        boolean bValid = b.getName()!=null && !b.getName().isEmpty();
-        if(aValid && bValid) {
-            int ret = a.getName().compareTo(b.getName());
-            if (ret != 0) return ret;
-            return a.getAddress().compareTo(b.getAddress());
+    companion object {
+        private const val LE_SCAN_PERIOD: Long = 10000 // similar to bluetoothAdapter.startDiscovery
+
+        /**
+         * sort by name, then address. sort named devices first
+         */
+        fun compareTo(a: BluetoothDevice?, b: BluetoothDevice?): Int {
+            val aValid = a!!.name != null && !a.name.isEmpty()
+            val bValid = b!!.name != null && !b.name.isEmpty()
+            if (aValid && bValid) {
+                val ret = a.name.compareTo(b.name)
+                return if (ret != 0) ret else a.address.compareTo(b.address)
+            }
+            if (aValid) return -1
+            return if (bValid) +1 else a.address.compareTo(b.address)
         }
-        if(aValid) return -1;
-        if(bValid) return +1;
-        return a.getAddress().compareTo(b.getAddress());
+    }
+
+    init {
+        leScanCallback =
+            LeScanCallback { device: BluetoothDevice?, rssi: Int, scanRecord: ByteArray? ->
+                if (device != null && activity != null) {
+                    activity!!.runOnUiThread { updateScan(device) }
+                }
+            }
+        discoveryBroadcastReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (BluetoothDevice.ACTION_FOUND == intent.action) {
+                    val device =
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    if (device!!.type != BluetoothDevice.DEVICE_TYPE_CLASSIC && activity != null) {
+                        activity!!.runOnUiThread { updateScan(device) }
+                    }
+                }
+                if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED == intent.action) {
+                    scanState = ScanState.DISCOVERY_FINISHED // don't cancel again
+                    stopScan()
+                }
+            }
+        }
+        discoveryIntentFilter = IntentFilter()
+        discoveryIntentFilter.addAction(BluetoothDevice.ACTION_FOUND)
+        discoveryIntentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
     }
 }
